@@ -3,29 +3,58 @@
 #include "precompiled.h"
 #include "cppunitlite/TestHarness.h"
 
-__declspec(naked) double _sin_x87(double angle) {
-	__asm {
-		fld qword ptr[esp+4]
-		fsin
-		ret
-	}
+#include <cmath>
+
+namespace
+{
+
+double SinReference(double angle)
+{
+#if defined(_MSC_VER) && defined(_M_IX86)
+        double result;
+        const double *input = &angle;
+
+        __asm
+        {
+                fld     qword ptr [input]
+                fsin
+                fstp    qword ptr [result]
+        }
+
+        return result;
+#else
+        return std::sin(angle);
+#endif
 }
 
-__declspec(naked) double _cos_x87(double angle) {
-	__asm {
-		fld qword ptr[esp + 4]
-		fcos
-		ret
-	}
+double CosReference(double angle)
+{
+#if defined(_MSC_VER) && defined(_M_IX86)
+        double result;
+        const double *input = &angle;
+
+        __asm
+        {
+                fld     qword ptr [input]
+                fcos
+                fstp    qword ptr [result]
+        }
+
+        return result;
+#else
+        return std::cos(angle);
+#endif
 }
+
+} // namespace
 
 TEST(SinCosPrecision, SseMathFun, 10000)
 {
 	char localbuf[256];
 
 	for (double i = 0.0; i < 2 * M_PI; i += (M_PI / 10000.0)) {
-		double x87_sin = _sin_x87(i);
-		double x87_cos = _cos_x87(i);
+                double x87_sin = SinReference(i);
+                double x87_cos = CosReference(i);
 
 		__m128 s, c, d;
 		d = _mm_set1_ps((float)i);

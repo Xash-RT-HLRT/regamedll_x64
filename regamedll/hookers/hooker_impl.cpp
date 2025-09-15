@@ -4,9 +4,9 @@
 
 // xrefs
 void (CBaseEntity::*pCHostage__IdleThink)();
-void (*pBotPhrase__Randomize)();
+void (*pBotPhrase__Randomize)(BotPhrase *);
 void (*pCCSBotManager__AddBot)();
-void (*pCCSBot__UpdateLookAngles)();
+void (*pCCSBot__UpdateLookAngles)(CCSBot *);
 
 // globals
 TYPEDESCRIPTION	IMPL_CLASS(CBaseEntity, m_SaveData)[5];
@@ -2044,7 +2044,10 @@ void CCSBot::Killed(entvars_t *pevAttacker, int iGib) { Killed_(pevAttacker, iGi
 // cs_bot_chatter
 // you can not hook this function, because it uses the rand() function
 // which does not allow us to carry out tests because different results at the output.
-void __declspec(naked) BotPhrase::Randomize() { __asm { jmp pBotPhrase__Randomize } }
+void BotPhrase::Randomize()
+{
+        pBotPhrase__Randomize(this);
+}
 
 void BotAllHostagesGoneMeme::Interpret(CCSBot *sender, CCSBot *receiver) const { Interpret_(sender, receiver); }
 void BotHostageBeingTakenMeme::Interpret(CCSBot *sender, CCSBot *receiver) const { Interpret_(sender, receiver); }
@@ -2082,7 +2085,10 @@ void CCSBot::Upkeep() { Upkeep_(); }
 void CCSBot::Update() { Update_(); }
 
 // cs_bot_vision
-void __declspec(naked) CCSBot::UpdateLookAngles() { __asm { jmp pCCSBot__UpdateLookAngles } }
+void CCSBot::UpdateLookAngles()
+{
+        pCCSBot__UpdateLookAngles(this);
+}
 void CCSBot::Blind(float duration, float holdTime, float fadeTime, int alpha) { Blind_(duration, holdTime, fadeTime, alpha); }
 bool CCSBot::IsVisible(const Vector *pos, bool testFOV) const { return IsVisible_(pos, testFOV); }
 bool CCSBot::IsVisible(CBasePlayer *player, bool testFOV, unsigned char *visParts) const { return IsVisible_(player, testFOV, visParts); }

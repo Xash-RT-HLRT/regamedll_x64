@@ -29,6 +29,10 @@
 
 #include "archtypes.h"
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 typedef float  float32;
 typedef double float64;
 
@@ -103,7 +107,13 @@ typedef void * HINSTANCE;
 #endif
 
 // Used to step into the debugger
-#define  DebuggerBreak()  __asm { int 3 }
+#if defined(_MSC_VER)
+#define  DebuggerBreak()  __debugbreak()
+#elif defined(__GNUC__) || defined(__clang__)
+#define  DebuggerBreak()  __builtin_trap()
+#else
+#define  DebuggerBreak()  ((void)0)
+#endif
 
 // C functions for external declarations that call the appropriate C++ methods
 #ifndef EXPORT
@@ -252,7 +262,7 @@ inline T DWordSwapC(T dw)
 // Fast swaps
 //-------------------------------------
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && defined(_M_IX86)
 
 #define WordSwap  WordSwapAsm
 #define DWordSwap DWordSwapAsm

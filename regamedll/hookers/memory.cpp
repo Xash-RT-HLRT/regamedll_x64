@@ -30,34 +30,42 @@
 
 #include "precompiled.h"
 
+#include <limits>
+
 #ifdef _WIN32
 
 #ifdef _MSC_VER
 #pragma comment(lib, "psapi.lib") // Process Status API
 #endif // _MSC_VER
 
+#if defined(_WIN64)
+using ImageNtHeaders = IMAGE_NT_HEADERS64;
+#else
+using ImageNtHeaders = IMAGE_NT_HEADERS;
+#endif
+
 bool HIDDEN FindModuleByAddress(size_t addr, Module *module)
 {
-	if (!module)
-		return false;
+        if (!module)
+                return false;
 
-	MEMORY_BASIC_INFORMATION mem;
-	VirtualQuery((void *)addr, &mem, sizeof(mem));
+        MEMORY_BASIC_INFORMATION mem;
+        VirtualQuery((void *)addr, &mem, sizeof(mem));
 
-	IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER*)mem.AllocationBase;
-	IMAGE_NT_HEADERS *pe = (IMAGE_NT_HEADERS*)((unsigned long)dos + (unsigned long)dos->e_lfanew);
+        IMAGE_DOS_HEADER *dos = reinterpret_cast<IMAGE_DOS_HEADER *>(mem.AllocationBase);
+        ImageNtHeaders *pe = reinterpret_cast<ImageNtHeaders *>(reinterpret_cast<unsigned char *>(dos) + dos->e_lfanew);
 
-	if (pe->Signature != IMAGE_NT_SIGNATURE)
-		return false;
+        if (pe->Signature != IMAGE_NT_SIGNATURE)
+                return false;
 
-	module->base = (size_t)mem.AllocationBase;
-	module->size = (size_t)pe->OptionalHeader.SizeOfImage;
-	module->end = module->base + module->size - 1;
-	module->handle = NULL;
+        module->base = reinterpret_cast<size_t>(mem.AllocationBase);
+        module->size = static_cast<size_t>(pe->OptionalHeader.SizeOfImage);
+        module->end = module->base + module->size - 1;
+        module->handle = NULL;
 
-	ProcessModuleData(module);
+        ProcessModuleData(module);
 
-	return true;
+        return true;
 }
 
 bool HIDDEN FindModuleByName(const char *moduleName, Module *module)
@@ -291,20 +299,35 @@ inline size_t HIDDEN FindSymbol(Module *module, const char* symbolName, int inde
 
 #else // _WIN32
 
+#if defined(__ELF_NATIVE_CLASS) && (__ELF_NATIVE_CLASS == 64)
+using ElfEhdr = Elf64_Ehdr;
+using ElfShdr = Elf64_Shdr;
+using ElfSym = Elf64_Sym;
+#else
+using ElfEhdr = Elf32_Ehdr;
+using ElfShdr = Elf32_Shdr;
+using ElfSym = Elf32_Sym;
+#endif
+
+static inline unsigned char ElfSymbolType(unsigned char info)
+{
+        return info & 0x0f;
+}
+
 size_t HIDDEN FindSymbol(Module *module, const char* symbolName, int index)
 {
 	int i;
 	link_map *dlmap;
 	struct stat dlstat;
 	int dlfile;
-	uintptr_t map_base;
-	Elf32_Ehdr *file_hdr;
-	Elf32_Shdr *sections, *shstrtab_hdr, *symtab_hdr, *strtab_hdr;
-	Elf32_Sym *symtab;
-	const char *shstrtab, *strtab;
-	uint16 section_count;
-	uint32 symbol_count;
-	size_t address;
+        uintptr_t map_base;
+        ElfEhdr *file_hdr;
+        ElfShdr *sections, *shstrtab_hdr, *symtab_hdr, *strtab_hdr;
+        ElfSym *symtab;
+        const char *shstrtab, *strtab;
+        uint16 section_count;
+        size_t symbol_count;
+        size_t address;
 
 	// If index > 0 then we shouldn't use dlsym, cos it will give wrong result
 	if (index == 0)
@@ -326,7 +349,7 @@ size_t HIDDEN FindSymbol(Module *module, const char* symbolName, int index)
 	}
 
 	// Map library file into memory
-	file_hdr = (Elf32_Ehdr *)mmap(NULL, dlstat.st_size, PROT_READ, MAP_PRIVATE, dlfile, 0);
+        file_hdr = (ElfEhdr *)mmap(NULL, dlstat.st_size, PROT_READ, MAP_PRIVATE, dlfile, 0);
 	map_base = (uintptr_t)file_hdr;
 	close(dlfile);
 	if (file_hdr == MAP_FAILED)
@@ -340,16 +363,16 @@ size_t HIDDEN FindSymbol(Module *module, const char* symbolName, int index)
 		return NULL;
 	}
 
-	sections = (Elf32_Shdr *)(map_base + file_hdr->e_shoff);
+        sections = (ElfShdr *)(map_base + file_hdr->e_shoff);
 	section_count = file_hdr->e_shnum;
 	// Get ELF section header string table
 	shstrtab_hdr = &sections[file_hdr->e_shstrndx];
 	shstrtab = (const char *)(map_base + shstrtab_hdr->sh_offset);
 
 	// Iterate sections while looking for ELF symbol table and string table
-	for (uint16 i = 0; i < section_count; i++)
-	{
-		Elf32_Shdr &hdr = sections[i];
+        for (uint16 i = 0; i < section_count; i++)
+        {
+                ElfShdr &hdr = sections[i];
 		const char *section_name = shstrtab + hdr.sh_name;
 		//printf("Seg[%d].name = '%s'\n", i, section_name);
 
@@ -369,7 +392,7 @@ size_t HIDDEN FindSymbol(Module *module, const char* symbolName, int index)
 		return NULL;
 	}
 
-	symtab = (Elf32_Sym *)(map_base + symtab_hdr->sh_offset);
+        symtab = (ElfSym *)(map_base + symtab_hdr->sh_offset);
 	strtab = (const char *)(map_base + strtab_hdr->sh_offset);
 	symbol_count = symtab_hdr->sh_size / symtab_hdr->sh_entsize;
 
@@ -380,11 +403,11 @@ size_t HIDDEN FindSymbol(Module *module, const char* symbolName, int index)
 	if (index == 0) index++;
 
 	// Iterate symbol table
-	int match = 1;
-	for (uint32 i = 0; i < symbol_count; i++)
-	{
-		Elf32_Sym &sym = symtab[i];
-		unsigned char sym_type = ELF32_ST_TYPE(sym.st_info);
+        int match = 1;
+        for (size_t i = 0; i < symbol_count; i++)
+        {
+                ElfSym &sym = symtab[i];
+                unsigned char sym_type = ElfSymbolType(sym.st_info);
 		const char *sym_name = strtab + sym.st_name;
 
 		// Skip symbols that are undefined or do not refer to functions or objects
@@ -433,36 +456,36 @@ extern void regamedll_syserror(const char* fmt, ...);
 void ProcessModuleData(Module *module)
 {
 	int i = 0;
-	PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)module->base;
-	if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
-		regamedll_syserror("%s: Invalid DOS header signature", __FUNCTION__);
-		return;
-	}
+        PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)module->base;
+        if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
+                regamedll_syserror("%s: Invalid DOS header signature", __FUNCTION__);
+                return;
+        }
 
-	PIMAGE_NT_HEADERS NTHeaders = (PIMAGE_NT_HEADERS)((size_t)module->base + dosHeader->e_lfanew);
-	if (NTHeaders->Signature != 0x4550) {
-		regamedll_syserror("%s: Invalid NT header signature", __FUNCTION__);
-		return;
-	}
+        ImageNtHeaders *NTHeaders = reinterpret_cast<ImageNtHeaders *>(module->base + dosHeader->e_lfanew);
+        if (NTHeaders->Signature != 0x4550) {
+                regamedll_syserror("%s: Invalid NT header signature", __FUNCTION__);
+                return;
+        }
 
-	PIMAGE_SECTION_HEADER cSection = (PIMAGE_SECTION_HEADER)((size_t)(&NTHeaders->OptionalHeader) + NTHeaders->FileHeader.SizeOfOptionalHeader);
+        PIMAGE_SECTION_HEADER cSection = reinterpret_cast<PIMAGE_SECTION_HEADER>(reinterpret_cast<unsigned char *>(&NTHeaders->OptionalHeader) + NTHeaders->FileHeader.SizeOfOptionalHeader);
 
-	PIMAGE_SECTION_HEADER CodeSection = NULL;
+        PIMAGE_SECTION_HEADER CodeSection = NULL;
 
-	for (i = 0; i < NTHeaders->FileHeader.NumberOfSections; i++, cSection++) {
-		if (cSection->VirtualAddress == NTHeaders->OptionalHeader.BaseOfCode)
+        for (i = 0; i < NTHeaders->FileHeader.NumberOfSections; i++, cSection++) {
+                if (cSection->VirtualAddress == NTHeaders->OptionalHeader.BaseOfCode)
 			CodeSection = cSection;
 	}
 
 	if (CodeSection == NULL) {
-		regamedll_syserror("%s: Code section not found", __FUNCTION__);
-		return;
-	}
+                regamedll_syserror("%s: Code section not found", __FUNCTION__);
+                return;
+        }
 
-	module->codeSection.start = (uint32)module->base + CodeSection->VirtualAddress;
-	module->codeSection.size = CodeSection->Misc.VirtualSize;
-	module->codeSection.end = module->codeSection.start + module->codeSection.size;
-	module->codeSection.next = NULL;
+        module->codeSection.start = module->base + CodeSection->VirtualAddress;
+        module->codeSection.size = CodeSection->Misc.VirtualSize;
+        module->codeSection.end = module->codeSection.start + module->codeSection.size;
+        module->codeSection.next = NULL;
 }
 
 #else // _WIN32
@@ -660,39 +683,42 @@ size_t HIDDEN MemoryFindRefForwardPrefix8(size_t start, size_t end, size_t refAd
 		start = reverse;
 	}
 
-	unsigned char *cend = (unsigned char*)(end - 5 + 1);
-	unsigned char *current = (unsigned char*)(start);
+        unsigned char *cend = (unsigned char*)(end - 5 + 1);
+        unsigned char *current = (unsigned char*)(start);
 
 	// Just linear search for sequence of bytes from the start till the end minus pattern length
 	while (current < cend)
 	{
 		if (*current == prefixValue)
 		{
-			if (relative)
-			{
-				if ((size_t)(*(size_t *)(current + 1) + current + 5) == refAddress)
-					return (size_t)(void*)current;
-			}
-			else
-			{
-				if (*(size_t *)(current + 1) == refAddress)
-					return (size_t)(void*)current;
-			}
-		}
-		current++;
-	}
+                        if (relative)
+                        {
+                                const int32 displacement = *reinterpret_cast<const int32 *>(current + 1);
+                                if (reinterpret_cast<size_t>(current + 5 + displacement) == refAddress)
+                                        return reinterpret_cast<size_t>(current);
+                        }
+                        else
+                        {
+                                size_t absolute = 0;
+                                memcpy(&absolute, current + 1, sizeof(absolute));
+                                if (absolute == refAddress)
+                                        return reinterpret_cast<size_t>(current);
+                        }
+                }
+                current++;
+        }
 
-	return NULL;
+        return NULL;
 }
 
 // Replaces double word on specified address with a new dword, returns old dword
 uint32 HIDDEN HookDWord(size_t addr, uint32 newDWord)
 {
-	uint32 origDWord = *(size_t *)addr;
-	EnablePageWrite(addr, sizeof(uint32));
-	*(size_t *)addr = newDWord;
-	RestorePageProtection(addr, sizeof(uint32));
-	return origDWord;
+        uint32 origDWord = *reinterpret_cast<uint32 *>(addr);
+        EnablePageWrite(addr, sizeof(uint32));
+        *reinterpret_cast<uint32 *>(addr) = newDWord;
+        RestorePageProtection(addr, sizeof(uint32));
+        return origDWord;
 }
 
 // Exchanges bytes between memory address and bytes array
@@ -745,13 +771,18 @@ char patchByteOriginal[5];
 
 bool HIDDEN HookFunction(Module *module, FunctionHook *hook)
 {
-	if (hook->originalAddress == NULL)
-		return false;
+        if (hook->originalAddress == NULL)
+                return false;
 
-	// Calculate and store offset for jump to our handler
-	unsigned char patch[5];
-	*(size_t *)&patch[1] = hook->handlerFunc - hook->originalAddress - 5;
-	patch[0] = 0xE9;
+        // Calculate and store offset for jump to our handler
+        unsigned char patch[5];
+        patch[0] = 0xE9;
+
+        ptrdiff_t relativeOffset = static_cast<ptrdiff_t>(hook->handlerFunc) - static_cast<ptrdiff_t>(hook->originalAddress) - 5;
+        if (relativeOffset < std::numeric_limits<int32>::min() || relativeOffset > std::numeric_limits<int32>::max())
+                return false;
+
+        *reinterpret_cast<int32 *>(&patch[1]) = static_cast<int32>(relativeOffset);
 
 #if HOOK_GAMEDLL
 	//static DWORD oldProtection;
@@ -769,7 +800,7 @@ bool HIDDEN HookFunction(Module *module, FunctionHook *hook)
 		memcpy(patchByteOriginal,addr_orig,5);
 	}
 #endif
-	ExchangeMemoryBytes(hook->originalAddress, (size_t)patch, 5);
+        ExchangeMemoryBytes(hook->originalAddress, reinterpret_cast<size_t>(patch), 5);
 
 	hook->bIsHooked = true;
 	return true;
@@ -777,11 +808,18 @@ bool HIDDEN HookFunction(Module *module, FunctionHook *hook)
 
 void HIDDEN HookFunctionCall(void* hookWhat, void* hookAddr)
 {
-	unsigned char patch[5];
-	*(size_t *)&patch[1] = (size_t)hookAddr - (size_t)hookWhat - 5;
-	patch[0] = 0xE8;
+        unsigned char patch[5];
+        patch[0] = 0xE8;
 
-	ExchangeMemoryBytes((size_t)hookWhat, (size_t)patch, 5);
+        unsigned char *from = reinterpret_cast<unsigned char *>(hookWhat);
+        unsigned char *to = reinterpret_cast<unsigned char *>(hookAddr);
+        ptrdiff_t relativeOffset = to - (from + 5);
+        if (relativeOffset < std::numeric_limits<int32>::min() || relativeOffset > std::numeric_limits<int32>::max())
+                return;
+
+        *reinterpret_cast<int32 *>(&patch[1]) = static_cast<int32>(relativeOffset);
+
+        ExchangeMemoryBytes(reinterpret_cast<size_t>(hookWhat), reinterpret_cast<size_t>(patch), 5);
 }
 
 bool HIDDEN FindDataRef(Module *module, AddressRef *ref)
@@ -800,17 +838,17 @@ bool HIDDEN FindDataRef(Module *module, AddressRef *ref)
 }
 
 #ifdef _WIN32
-void FindAllCalls(Section* section, CFuncAddr** calls, uint32 findRefsTo)
+void FindAllCalls(Section* section, CFuncAddr** calls, size_t findRefsTo)
 {
-	uint32 coderef_addr = section->start;
-	coderef_addr = MemoryFindRefForwardPrefix8(coderef_addr, section->end, findRefsTo, 0xE8, true);
-	while (coderef_addr) {
-		CFuncAddr* cfa = new CFuncAddr(coderef_addr);
-		cfa->Next = *calls;
-		*calls = cfa;
+        size_t coderef_addr = section->start;
+        coderef_addr = MemoryFindRefForwardPrefix8(coderef_addr, section->end, findRefsTo, 0xE8, true);
+        while (coderef_addr) {
+                CFuncAddr* cfa = new CFuncAddr(coderef_addr);
+                cfa->Next = *calls;
+                *calls = cfa;
 
-		coderef_addr = MemoryFindRefForwardPrefix8(coderef_addr + 1, section->end, findRefsTo, 0xE8, true);
-	}
+                coderef_addr = MemoryFindRefForwardPrefix8(coderef_addr + 1, section->end, findRefsTo, 0xE8, true);
+        }
 }
 #endif // _WIN32
 
@@ -876,18 +914,18 @@ void VirtualTableInit(void *ptr, const char *baseClass)
 		regamedll_syserror("%s: Invalid size virtual table, expected [%d], got [%d]", __FUNCTION__, nCount, refsVtbl->size);
 	*/
 
-	int **ivtable = *(int ***)ptr;
-	int **ivtable_orig = (int **)refsVtbl->originalAddress;
+        int **ivtable = *(int ***)ptr;
+        int **ivtable_orig = (int **)refsVtbl->originalAddress;
 
-	for (size_t i = 0; i < refsVtbl->size; i++)
-	{
-		if (!GetAddressUsingHook((size_t)ivtable_orig[i]))
-		{
-			EnablePageWrite((size_t)&ivtable[i], 5);
-			ivtable[i] = ivtable_orig[i];
-			RestorePageProtection((size_t)&ivtable[i], 5);
-		}
-	}
+        for (size_t i = 0; i < refsVtbl->size; i++)
+        {
+                if (!GetAddressUsingHook(reinterpret_cast<size_t>(ivtable_orig[i])))
+                {
+                        EnablePageWrite(reinterpret_cast<size_t>(&ivtable[i]), sizeof(ivtable[i]));
+                        ivtable[i] = ivtable_orig[i];
+                        RestorePageProtection(reinterpret_cast<size_t>(&ivtable[i]), sizeof(ivtable[i]));
+                }
+        }
 }
 
 void HIDDEN GetAddressVtableByClassname(const char *szClassName, const int iOffset, bool bCreate)
