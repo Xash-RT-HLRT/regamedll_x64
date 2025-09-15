@@ -96,9 +96,9 @@ typedef float FloatRef;
 
 // refs
 extern void (CBaseEntity::*pCHostage__IdleThink)();
-extern void (*pBotPhrase__Randomize)();
+extern void (*pBotPhrase__Randomize)(BotPhrase *);
 extern void (*pCCSBotManager__AddBot)();
-extern void (*pCCSBot__UpdateLookAngles)();
+extern void (*pCCSBot__UpdateLookAngles)(CCSBot *);
 
 // globals export
 #define g_engfuncs (*pg_engfuncs)
