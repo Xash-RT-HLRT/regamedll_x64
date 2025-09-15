@@ -96,21 +96,21 @@ struct AddressRef
 
 class CFuncAddr {
 public:
-	uint32 Addr;
-	CFuncAddr *Next;
+        size_t Addr;
+        CFuncAddr *Next;
 
-	void *operator new(size_t size){
-		return malloc(size * sizeof(CFuncAddr));
-	}
+        void *operator new(size_t size){
+                return malloc(size * sizeof(CFuncAddr));
+        }
 
-	void operator delete(void *cPoint) {
-		free(cPoint);
-	}
+        void operator delete(void *cPoint) {
+                free(cPoint);
+        }
 
-	CFuncAddr(uint32 addr) {
-		Addr = addr;
-		Next = NULL;
-	}
+        CFuncAddr(size_t addr) {
+                Addr = addr;
+                Next = NULL;
+        }
 
 	~CFuncAddr() {
 		if (Next) {
@@ -139,7 +139,7 @@ void HookFunctionCall(void* hookWhat, void* hookAddr);
 bool HIDDEN FindDataRef(Module *module, AddressRef *ref);
 
 #ifdef WIN32
-void FindAllCalls(Section* section, CFuncAddr** calls, uint32 findRefsTo);
+void FindAllCalls(Section* section, CFuncAddr** calls, size_t findRefsTo);
 #endif
 
 #if defined(HOOK_GAMEDLL) && defined(_WIN32) && !defined(REGAMEDLL_UNIT_TESTS)
